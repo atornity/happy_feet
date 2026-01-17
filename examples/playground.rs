@@ -26,7 +26,7 @@ fn main() -> AppExit {
             CharacterPlugins::default(),
             EnhancedInputPlugin,
         ))
-        .insert_resource(AmbientLight {
+        .insert_resource(GlobalAmbientLight {
             color: ALICE_BLUE.into(),
             brightness: 200.0,
             ..Default::default()

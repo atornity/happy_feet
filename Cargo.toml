@@ -11,11 +11,11 @@ default = []
 serde = ["dep:serde", "avian3d/serialize"]
 
 [dependencies]
-avian3d = "0.4"
-bevy = { version = "0.17.0", default-features = false }
+avian3d = "0.5.0"
+bevy = { version = "0.18.0", default-features = false }
 serde = { version = "1.0.219", optional = true }
 
 [dev-dependencies]
-bevy = "0.17.0"
-bevy_enhanced_input = "0.19.0"
-bevy_skein = "0.3.0-rc.1"
+bevy = "0.18.0"
+bevy_enhanced_input = "0.22.1"
+bevy_skein = "0.5.0-rc.1"
