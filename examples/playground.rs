@@ -6,6 +6,7 @@ use std::f32::consts::PI;
 use avian3d::prelude::*;
 use bevy::{
     color::palettes::css::*,
+    input::InputSystems,
     prelude::*,
     window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
@@ -44,7 +45,7 @@ fn main() -> AppExit {
         .add_systems(PreUpdate, update_movement_settings)
         .add_systems(
             PreUpdate,
-            (move_input, look_input).before(EnhancedInputSystems::Prepare),
+            (move_input, look_input).after(EnhancedInputSystems::Apply),
         )
         .add_systems(Update, (remove_ground_when_flying, capture_mouse))
         .add_systems(
