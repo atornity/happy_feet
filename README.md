@@ -12,8 +12,8 @@ Work in progress kinematic character controller for the bevy game engine.
 ```toml
 # Cargo.toml
 [dependencies]
-avian3d = "0.3.1"
-bevy = "0.16.1"
+avian3d = "0.5.0"
+bevy = "0.18.0"
 happy_feet = { git = "https://github.com/atornity/happy_feet.git" }
 ```
 
