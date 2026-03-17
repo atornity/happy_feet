@@ -68,10 +68,10 @@ pub struct OnGroundLeave {
 }
 
 fn detect_ground(
-    query_pipeline: Res<SpatialQueryPipeline>,
+    mut spatial_params: ParamSet<(SpatialQuery, Query<&mut Position>)>,
     global_collide_and_slide_config: Res<CollideAndSlideConfig>,
     mut query: Query<(
-        &mut Position,
+        Entity,
         &Rotation,
         &mut GroundingState,
         &Grounding,
@@ -83,7 +83,7 @@ fn detect_ground(
     sensors: Query<Entity, With<Sensor>>,
 ) {
     for (
-        mut position,
+        entity,
         rotation,
         mut grounding_state,
         grounding,
@@ -97,6 +97,8 @@ fn detect_ground(
         if !grounding.is_grounded() && grounding_state.pending.is_none() {
             continue;
         }
+
+        let position_val = spatial_params.p1().get(entity).unwrap().0;
 
         let collide_and_slide_config = collide_and_slide_config
             .copied()
@@ -112,69 +114,72 @@ fn detect_ground(
         // proper ground contact in these cases.
         let mut movement = MovementState::new(
             -grounding_config.up_direction * grounding_config.max_distance,
-            position.0,
+            position_val,
             1.0,
         );
 
-        collide_and_slide(
-            &mut movement,
-            collider,
-            rotation.0,
-            &CollideAndSlideConfig {
-                max_iterations: grounding_config.max_iterations,
-                ..collide_and_slide_config
-            },
-            &query_pipeline,
-            filter,
-            |hit| {
-                if !filter_hits(hit) {
-                    return None;
-                }
+        {
+            let query_pipeline = spatial_params.p0();
+            collide_and_slide(
+                &mut movement,
+                collider,
+                rotation.0,
+                &CollideAndSlideConfig {
+                    max_iterations: grounding_config.max_iterations,
+                    ..collide_and_slide_config
+                },
+                &query_pipeline,
+                filter,
+                |hit| {
+                    if !filter_hits(hit) {
+                        return None;
+                    }
 
-                let mut normal = hit.normal;
+                    let mut normal = hit.normal;
 
-                // The collision engine returns separation normals rather than surface normals
-                // This can cause issues when determining if a surface would be walkable, especially on edges.
-                // We attempt to find a better surface normal by casting a few rays near the collision point.
-                if let Some(ray_hit) = find_surface_normal(
-                    hit.point,
-                    hit.normal,
-                    grounding_config.up_direction,
-                    0.01,
-                    &query_pipeline,
-                    filter,
-                    filter_hits,
-                ) && ray_hit.normal.dot(*grounding_config.up_direction)
-                    > hit.normal.dot(*grounding_config.up_direction)
-                {
-                    normal = ray_hit.normal;
-                }
+                    // The collision engine returns separation normals rather than surface normals
+                    // This can cause issues when determining if a surface would be walkable, especially on edges.
+                    // We attempt to find a better surface normal by casting a few rays near the collision point.
+                    if let Some(ray_hit) = find_surface_normal(
+                        hit.point,
+                        hit.normal,
+                        grounding_config.up_direction,
+                        0.01,
+                        &query_pipeline,
+                        filter,
+                        filter_hits,
+                    ) && ray_hit.normal.dot(*grounding_config.up_direction)
+                        > hit.normal.dot(*grounding_config.up_direction)
+                    {
+                        normal = ray_hit.normal;
+                    }
 
-                Some(Surface::new(
-                    normal,
-                    walkable_angle(grounding_config.max_angle, grounding.is_grounded()),
-                    grounding_config.up_direction,
-                ))
-            },
-            |movement, slide| match slide.surface.is_walkable {
-                true => {
-                    // Push the character back up to maintain surface distance
-                    let dist =
-                        slide.hit.distance + collide_and_slide_config.max_penetration_retraction;
-                    movement.offset -= grounding_config.up_direction * dist.min(0.0);
+                    Some(Surface::new(
+                        normal,
+                        walkable_angle(grounding_config.max_angle, grounding.is_grounded()),
+                        grounding_config.up_direction,
+                    ))
+                },
+                |movement, slide| match slide.surface.is_walkable {
+                    true => {
+                        // Push the character back up to maintain surface distance
+                        let dist = slide.hit.distance
+                            + collide_and_slide_config.max_penetration_retraction;
+                        movement.offset -= grounding_config.up_direction * dist.min(0.0);
 
-                    CollisionResponse::Stop
-                }
-                false => CollisionResponse::Slide,
-            },
-            |velocity, surface| velocity.reject_from(*surface.normal),
-        );
+                        CollisionResponse::Stop
+                    }
+                    false => CollisionResponse::Slide,
+                },
+                |velocity, surface| velocity.reject_from(*surface.normal),
+            );
+        }
 
         grounding_state.pending = movement.ground;
 
         // Snap the character to the ground surface when a ground is detected
         if grounding_config.snap_to_surface && movement.ground.is_some() {
-            position.0 += movement.offset;
+            spatial_params.p1().get_mut(entity).unwrap().0 = position_val + movement.offset;
         }
     }
 }
@@ -406,7 +411,7 @@ pub(crate) fn find_surface_normal(
     normal: Vec3,
     up_direction: Dir3,
     epsilon: f32,
-    query_pipeline: &SpatialQueryPipeline,
+    query_pipeline: &SpatialQuery,
     query_filter: &SpatialQueryFilter,
     mut filter_hits: impl FnMut(&SweepHitData) -> bool,
 ) -> Option<SweepHitData> {
