@@ -12,7 +12,7 @@ pub fn collide_and_slide(
     shape: &Collider,
     rotation: Quat,
     config: &CollideAndSlideConfig,
-    query_pipeline: &SpatialQueryPipeline,
+    query_pipeline: &SpatialQuery,
     filter: &SpatialQueryFilter,
     mut get_surface: impl FnMut(&SweepHitData) -> Option<Surface>,
     mut on_hit: impl FnMut(&mut MovementState, SlideInfo) -> CollisionResponse,
@@ -40,8 +40,12 @@ pub fn collide_and_slide(
 
         let mut surface = None;
         let Some(hit) = collision_sweep(shape, input, query_pipeline, filter, |hit| {
-            surface = get_surface(hit);
-            surface.is_some()
+            if let Some(s) = get_surface(hit) {
+                surface = Some(s);
+                true
+            } else {
+                false
+            }
         }) else {
             state.offset += direction * max_distance;
             break;

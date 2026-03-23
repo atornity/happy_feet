@@ -35,12 +35,7 @@ impl Plugin for CharacterPlugin {
             CharacterSystems.in_set(NarrowPhaseSystems::Last),
         );
 
-        app.add_systems(
-            PhysicsSchedule,
-            (update_query_pipeline, process_movement)
-                .chain()
-                .in_set(CharacterSystems),
-        );
+        app.add_systems(PhysicsSchedule, process_movement.in_set(CharacterSystems));
     }
 }
 
@@ -118,21 +113,15 @@ pub struct OnStep {
     pub hit: SweepHitData,
 }
 
-// TODO: is this necessary?
-fn update_query_pipeline(mut spatial_query: SpatialQuery) {
-    spatial_query.update_pipeline();
-}
-
 #[allow(clippy::type_complexity)]
 fn process_movement(
     // mut gizmos: Gizmos,
     global_collide_and_slide_config: Res<CollideAndSlideConfig>,
-    query_pipeline: Res<SpatialQueryPipeline>,
+    mut spatial_params: ParamSet<(SpatialQuery, Query<&mut Position>)>,
     mut commands: Commands,
     mut query: Query<(
         Entity,
         &mut KinematicVelocity,
-        &mut Position,
         &Rotation,
         &Collider,
         &CollideAndSlideFilter,
@@ -152,7 +141,6 @@ fn process_movement(
     for (
         entity,
         mut velocity,
-        mut position,
         rotation,
         collider,
         filter,
@@ -163,10 +151,13 @@ fn process_movement(
         is_sensor,
     ) in &mut query
     {
+        let position_val = spatial_params.p1().get(entity).unwrap().0;
+
         // Sensors don't need to collide
         // TODO: should we still trigger OnHit events maybe?
         if is_sensor {
-            position.0 += velocity.0 * time.delta_secs();
+            spatial_params.p1().get_mut(entity).unwrap().0 =
+                position_val + velocity.0 * time.delta_secs();
             continue;
         }
 
@@ -180,177 +171,180 @@ fn process_movement(
         let is_grounded = grounding.as_ref().is_some_and(|(g, ..)| g.is_grounded());
 
         let mut collision = CollisionState::default();
-        let mut movement = MovementState::new(velocity.0, position.0, time.delta_secs());
+        let mut movement = MovementState::new(velocity.0, position_val, time.delta_secs());
         let mut previous_velocity = movement.velocity;
 
         let mut slide_events = Vec::<OnSlide>::new();
 
-        collide_and_slide(
-            &mut movement,
-            collider,
-            rotation.0,
-            &collide_and_slide_config,
-            &query_pipeline,
-            filter,
-            |hit| {
-                if !filter_hits(hit) {
-                    return None;
-                }
-
-                Some(match grounding.as_ref() {
-                    Some((grounding, grounding_config, _)) => Surface::new(
-                        hit.normal,
-                        walkable_angle(grounding_config.max_angle, grounding.is_grounded()),
-                        grounding_config.up_direction,
-                    ),
-                    None => Surface {
-                        normal: Dir3::new(hit.normal).unwrap(),
-                        is_walkable: false,
-                    },
-                })
-            },
-            |movement,
-             SlideInfo {
-                 input,
-                 hit,
-                 surface,
-             }| {
-                // Stepping logic
-                if !surface.is_walkable
-                    && let Some((stepping_config, (grounding, grounding_config, _))) =
-                        stepping.zip(grounding.as_ref())
-                    && match stepping_config.behaviour {
-                        SteppingBehaviour::Never => false,
-                        SteppingBehaviour::Grounded => grounding.is_grounded(),
-                        SteppingBehaviour::Always => true,
+        {
+            let query_pipeline = spatial_params.p0();
+            collide_and_slide(
+                &mut movement,
+                collider,
+                rotation.0,
+                &collide_and_slide_config,
+                &query_pipeline,
+                filter,
+                |hit| {
+                    if !filter_hits(hit) {
+                        return None;
                     }
-                {
-                    let remaining_horizontal_velocity = (movement.velocity
-                        * movement.remaining_time)
-                        .reject_from(*grounding_config.up_direction);
 
-                    if let Ok((horizontal_direction, horizontal_motion)) =
-                        Dir3::new_and_length(remaining_horizontal_velocity)
-                        && let Some(StepOutput {
-                            horizontal,
-                            vertical,
-                            hit: step_hit,
-                        }) = perform_step(
-                            stepping_config,
-                            collider,
-                            movement.position(),
-                            rotation.0,
-                            horizontal_direction,
-                            horizontal_motion,
+                    Some(match grounding.as_ref() {
+                        Some((grounding, grounding_config, _)) => Surface::new(
+                            hit.normal,
+                            walkable_angle(grounding_config.max_angle, grounding.is_grounded()),
                             grounding_config.up_direction,
-                            collide_and_slide_config.skin_width,
-                            &query_pipeline,
-                            filter,
-                            filter_hits,
-                            |hit| {
-                                // Only step on surfaces that are walkable
-                                if !is_walkable(
-                                    hit.normal,
-                                    stepping_config
-                                        .max_angle
-                                        .unwrap_or(grounding_config.max_angle),
-                                    *grounding_config.up_direction,
-                                ) {
-                                    return false;
-                                }
+                        ),
+                        None => Surface {
+                            normal: Dir3::new(hit.normal).unwrap(),
+                            is_walkable: false,
+                        },
+                    })
+                },
+                |movement,
+                 SlideInfo {
+                     input,
+                     hit,
+                     surface,
+                 }| {
+                    // Stepping logic
+                    if !surface.is_walkable
+                        && let Some((stepping_config, (grounding, grounding_config, _))) =
+                            stepping.zip(grounding.as_ref())
+                        && match stepping_config.behaviour {
+                            SteppingBehaviour::Never => false,
+                            SteppingBehaviour::Grounded => grounding.is_grounded(),
+                            SteppingBehaviour::Always => true,
+                        }
+                    {
+                        let remaining_horizontal_velocity = (movement.velocity
+                            * movement.remaining_time)
+                            .reject_from(*grounding_config.up_direction);
 
-                                // Stepping on dynamic bodies is a bit buggy right now ):
-                                if let Ok(rb) = rigid_bodies.get(hit.entity)
-                                    && rb.is_dynamic()
-                                {
-                                    return false;
-                                }
+                        if let Ok((horizontal_direction, horizontal_motion)) =
+                            Dir3::new_and_length(remaining_horizontal_velocity)
+                            && let Some(StepOutput {
+                                horizontal,
+                                vertical,
+                                hit: step_hit,
+                            }) = perform_step(
+                                stepping_config,
+                                collider,
+                                movement.position(),
+                                rotation.0,
+                                horizontal_direction,
+                                horizontal_motion,
+                                grounding_config.up_direction,
+                                collide_and_slide_config.skin_width,
+                                &query_pipeline,
+                                filter,
+                                filter_hits,
+                                |hit| {
+                                    // Only step on surfaces that are walkable
+                                    if !is_walkable(
+                                        hit.normal,
+                                        stepping_config
+                                            .max_angle
+                                            .unwrap_or(grounding_config.max_angle),
+                                        *grounding_config.up_direction,
+                                    ) {
+                                        return false;
+                                    }
 
-                                true
+                                    // Stepping on dynamic bodies is a bit buggy right now ):
+                                    if let Ok(rb) = rigid_bodies.get(hit.entity)
+                                        && rb.is_dynamic()
+                                    {
+                                        return false;
+                                    }
+
+                                    true
+                                },
+                            )
+                        {
+                            let offset = grounding_config.up_direction * vertical
+                                + horizontal_direction * horizontal;
+                            let duration = horizontal * time.delta_secs();
+
+                            // Trigger step event
+                            commands.entity(entity).trigger(|entity| OnStep {
+                                entity,
+                                origin: movement.position(),
+                                velocity: movement.velocity,
+                                offset,
+                                hit: step_hit,
+                            });
+
+                            // Update movement state
+                            movement.offset += offset;
+                            movement.velocity = align_with_surface(
+                                movement.velocity,
+                                step_hit.normal,
+                                *grounding_config.up_direction,
+                            );
+                            movement.ground = Some(Ground::new(step_hit.entity, step_hit.normal));
+                            movement.remaining_time = (movement.remaining_time - duration).max(0.0);
+
+                            // Obstruction was avoided, skip projecting velocity
+                            return CollisionResponse::Skip;
+                        }
+                    }
+
+                    // Push slide event
+                    if let Some(last) = slide_events.last_mut() {
+                        last.duration -= movement.remaining_time;
+                    }
+                    slide_events.push(OnSlide {
+                        entity: Entity::PLACEHOLDER,
+                        velocity: movement.velocity,
+                        duration: movement.remaining_time,
+                        input,
+                        hit,
+                        surface,
+                    });
+
+                    // Write collision events
+                    if collision_events_enabled {
+                        collision_started_events.write(CollisionStart {
+                            collider1: entity,
+                            collider2: hit.entity,
+                            body1: colliders_of.get(entity).ok().map(|of| of.body),
+                            body2: colliders_of.get(hit.entity).ok().map(|of| of.body),
+                        });
+                        // Assume the collision is ended immediately, which it did because we slided (:
+                        collision_ended_events.write(CollisionEnd {
+                            collider1: entity,
+                            collider2: hit.entity,
+                            body1: colliders_of.get(entity).ok().map(|of| of.body),
+                            body2: colliders_of.get(hit.entity).ok().map(|of| of.body),
+                        });
+                    }
+
+                    CollisionResponse::Slide
+                },
+                |velocity, surface| match grounding.as_ref() {
+                    Some((grounding, grounding_config, _))
+                        if grounding_config.override_velocity_projection =>
+                    {
+                        collision.update(
+                            surface,
+                            velocity,
+                            mem::replace(&mut previous_velocity, velocity),
+                            is_grounded,
+                            |vel| {
+                                surface.project_velocity(
+                                    vel,
+                                    grounding.normal(),
+                                    grounding_config.up_direction,
+                                )
                             },
                         )
-                    {
-                        let offset = grounding_config.up_direction * vertical
-                            + horizontal_direction * horizontal;
-                        let duration = horizontal * time.delta_secs();
-
-                        // Trigger step event
-                        commands.entity(entity).trigger(|entity| OnStep {
-                            entity,
-                            origin: movement.position(),
-                            velocity: movement.velocity,
-                            offset,
-                            hit: step_hit,
-                        });
-
-                        // Update movement state
-                        movement.offset += offset;
-                        movement.velocity = align_with_surface(
-                            movement.velocity,
-                            step_hit.normal,
-                            *grounding_config.up_direction,
-                        );
-                        movement.ground = Some(Ground::new(step_hit.entity, step_hit.normal));
-                        movement.remaining_time = (movement.remaining_time - duration).max(0.0);
-
-                        // Obstruction was avoided, skip projecting velocity
-                        return CollisionResponse::Skip;
                     }
-                }
-
-                // Push slide event
-                if let Some(last) = slide_events.last_mut() {
-                    last.duration -= movement.remaining_time;
-                }
-                slide_events.push(OnSlide {
-                    entity: Entity::PLACEHOLDER,
-                    velocity: movement.velocity,
-                    duration: movement.remaining_time,
-                    input,
-                    hit,
-                    surface,
-                });
-
-                // Write collision events
-                if collision_events_enabled {
-                    collision_started_events.write(CollisionStart {
-                        collider1: entity,
-                        collider2: hit.entity,
-                        body1: colliders_of.get(entity).ok().map(|of| of.body),
-                        body2: colliders_of.get(hit.entity).ok().map(|of| of.body),
-                    });
-                    // Assume the collision is ended immediately, which it did because we slided (:
-                    collision_ended_events.write(CollisionEnd {
-                        collider1: entity,
-                        collider2: hit.entity,
-                        body1: colliders_of.get(entity).ok().map(|of| of.body),
-                        body2: colliders_of.get(hit.entity).ok().map(|of| of.body),
-                    });
-                }
-
-                CollisionResponse::Slide
-            },
-            |velocity, surface| match grounding.as_ref() {
-                Some((grounding, grounding_config, _))
-                    if grounding_config.override_velocity_projection =>
-                {
-                    collision.update(
-                        surface,
-                        velocity,
-                        mem::replace(&mut previous_velocity, velocity),
-                        is_grounded,
-                        |vel| {
-                            surface.project_velocity(
-                                vel,
-                                grounding.normal(),
-                                grounding_config.up_direction,
-                            )
-                        },
-                    )
-                }
-                _ => velocity.reject_from(*surface.normal),
-            },
-        );
+                    _ => velocity.reject_from(*surface.normal),
+                },
+            );
+        }
 
         // Trigger slide events
         commands.queue(move |world: &mut World| {
@@ -367,7 +361,7 @@ fn process_movement(
             .insert(MovementDelta(movement.offset));
 
         // Apply movement
-        position.0 += movement.offset;
+        spatial_params.p1().get_mut(entity).unwrap().0 = position_val + movement.offset;
         velocity.0 = movement.velocity;
 
         if let Some((_, _, mut grounding_state)) = grounding {

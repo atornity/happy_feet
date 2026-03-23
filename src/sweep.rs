@@ -33,7 +33,7 @@ pub fn collision_sweep(
         skin_width,
         ignore_origin_penetration,
     }: SweepInput,
-    query_pipeline: &SpatialQueryPipeline,
+    query_pipeline: &SpatialQuery,
     query_filter: &SpatialQueryFilter,
     mut filter_hits: impl FnMut(&SweepHitData) -> bool,
 ) -> Option<SweepHitData> {
